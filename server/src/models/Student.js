@@ -12,15 +12,20 @@ const courseHistorySchema = new Schema(
   { _id: false }
 );
 
+const studyMajorSchema = new Schema(
+  {
+    code: { type: String, trim: true, uppercase: true },
+    name: { type: String, trim: true }
+  },
+  { _id: false }
+);
+
 const studentSchema = new Schema(
   {
     studentCode: { type: String, required: true, unique: true, trim: true },
-    userProfile: { type: Schema.Types.ObjectId, ref: 'Person' },
-    policyId: { type: Schema.Types.ObjectId, ref: 'Policy' },
     departmentId: { type: Schema.Types.ObjectId, ref: 'Department' },
     majorId: { type: Schema.Types.ObjectId, ref: 'Major' },
     cohortId: { type: Schema.Types.ObjectId, ref: 'Cohort' },
-    programId: { type: Schema.Types.ObjectId, ref: 'Program' },
     administrativeClassId: { type: Schema.Types.ObjectId, ref: 'AdministrativeClass' },
     fullName: { type: String, required: true, trim: true },
     dateOfBirth: Date,
@@ -30,7 +35,12 @@ const studentSchema = new Schema(
     phone: { type: String, trim: true },
     address: { type: String, trim: true },
     faculty: { type: String, required: true, trim: true },
+    majorCode: { type: String, trim: true, uppercase: true },
     major: { type: String, required: true, trim: true },
+    studyMajors: {
+      type: [studyMajorSchema],
+      default: []
+    },
     cohort: { type: String, required: true, trim: true },
     administrativeClass: { type: String, trim: true },
     academicStatus: {

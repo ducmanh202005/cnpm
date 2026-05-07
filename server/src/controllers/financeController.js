@@ -1,14 +1,38 @@
 import PaymentTransaction from '../models/PaymentTransaction.js';
-import Receipt from '../models/Receipt.js';
+import Semester from '../models/Semester.js';
 import Student from '../models/Student.js';
 import TuitionLiability from '../models/TuitionLiability.js';
-import TuitionRate from '../models/TuitionRate.js';
+import { createReference } from '../utils/reference.js';
 import { recordAuditLog } from '../services/auditService.js';
 import {
+  buildReceiptFromPayment,
   recalculateTuitionLiability,
   registerPaymentForLiability
 } from '../services/tuitionService.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
+
+const mapRateItem = (semester, rule) => ({
+  id: `${semester._id}:${rule.rateCode}`,
+  rateCode: rule.rateCode,
+  name: rule.name,
+  academicYear: rule.academicYear,
+  programType: rule.programType,
+  pricePerCredit: rule.pricePerCredit,
+  effectiveFrom: rule.effectiveFrom,
+  notes: rule.notes,
+  isActive: rule.isActive !== false,
+  semester: {
+    _id: semester._id,
+    code: semester.code,
+    name: semester.name,
+    academicYear: semester.academicYear
+  }
+});
+
+const flattenSemesterRates = (semesters) =>
+  semesters
+    .flatMap((semester) => (semester.tuitionRules || []).map((rule) => mapRateItem(semester, rule)))
+    .sort((a, b) => new Date(b.effectiveFrom || 0) - new Date(a.effectiveFrom || 0));
 
 export const getMyTuition = asyncHandler(async (req, res) => {
   if (req.user.linkedModel !== 'Student') {
@@ -34,24 +58,52 @@ export const getMyTuition = asyncHandler(async (req, res) => {
 });
 
 export const listRates = asyncHandler(async (req, res) => {
-  const items = await TuitionRate.find().populate('semester').sort({ createdAt: -1 });
+  const semesters = await Semester.find().sort({ startDate: -1 });
+  const items = flattenSemesterRates(semesters);
   res.json({ items });
 });
 
 export const createRate = asyncHandler(async (req, res) => {
-  const rate = await TuitionRate.create(req.body);
+  const semesterId = req.body.semester || req.body.semesterId;
+  if (!semesterId) {
+    res.status(400);
+    throw new Error('Vui long chon hoc ky de thiet lap bieu phi.');
+  }
+
+  const semester = await Semester.findById(semesterId);
+  if (!semester) {
+    res.status(404);
+    throw new Error('Khong tim thay hoc ky.');
+  }
+
+  const nextRule = {
+    rateCode: (req.body.rateCode || createReference('BP')).toUpperCase(),
+    name: req.body.name || `Bieu phi ${semester.name} ${semester.academicYear}`,
+    academicYear: req.body.academicYear || semester.academicYear,
+    programType: req.body.programType || 'standard',
+    pricePerCredit: Number(req.body.pricePerCredit || 0),
+    effectiveFrom: req.body.effectiveFrom ? new Date(req.body.effectiveFrom) : new Date(),
+    isActive: req.body.isActive !== false,
+    notes: req.body.notes || ''
+  };
+
+  semester.tuitionRules = [
+    ...(semester.tuitionRules || []).filter((item) => item.rateCode !== nextRule.rateCode),
+    nextRule
+  ];
+  await semester.save();
 
   await recordAuditLog({
     actor: req.user._id,
     action: 'tuition_rate.create',
-    subjectType: 'TuitionRate',
-    subjectId: String(rate._id),
+    subjectType: 'Semester',
+    subjectId: String(semester._id),
     ipAddress: req.ip,
-    details: { name: rate.name }
+    details: { name: nextRule.name, rateCode: nextRule.rateCode }
   });
 
   res.status(201).json({
-    item: await TuitionRate.findById(rate._id).populate('semester')
+    item: mapRateItem(semester, nextRule)
   });
 });
 
@@ -147,18 +199,22 @@ export const listReceipts = asyncHandler(async (req, res) => {
   if (req.query.studentId) {
     filter.student = req.query.studentId;
   }
-  if (req.query.semesterId) {
-    filter.semester = req.query.semesterId;
-  }
+  filter.receiptNumber = { $exists: true, $ne: null };
 
-  const items = await Receipt.find(filter)
+  const payments = await PaymentTransaction.find(filter)
     .populate('student')
-    .populate('semester')
     .populate({
-      path: 'payment',
-      populate: ['student', 'liability']
+      path: 'liability',
+      populate: { path: 'semester' }
     })
-    .sort({ issuedAt: -1 });
+    .sort({ receiptIssuedAt: -1 });
+
+  const items = payments
+    .map((payment) => buildReceiptFromPayment(payment, payment.liability))
+    .filter(Boolean)
+    .filter((item) =>
+      req.query.semesterId ? String(item.semester?._id) === String(req.query.semesterId) : true
+    );
 
   res.json({ items });
 });

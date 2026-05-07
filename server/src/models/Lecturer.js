@@ -5,7 +5,6 @@ const { Schema } = mongoose;
 const lecturerSchema = new Schema(
   {
     lecturerCode: { type: String, required: true, unique: true, trim: true },
-    userProfile: { type: Schema.Types.ObjectId, ref: 'Person' },
     departmentId: { type: Schema.Types.ObjectId, ref: 'Department' },
     fullName: { type: String, required: true, trim: true },
     dateOfBirth: Date,

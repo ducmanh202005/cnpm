@@ -19,7 +19,11 @@ const paymentTransactionSchema = new Schema(
     },
     referenceCode: { type: String, required: true, unique: true },
     gatewayMessage: { type: String, trim: true },
-    createdBy: { type: Schema.Types.ObjectId, ref: 'User' }
+    createdBy: { type: Schema.Types.ObjectId, ref: 'User' },
+    receiptNumber: { type: String, trim: true, sparse: true },
+    receiptIssuedAt: Date,
+    receiptContent: { type: String, trim: true },
+    confirmedBy: { type: Schema.Types.ObjectId, ref: 'User' }
   },
   { timestamps: true }
 );

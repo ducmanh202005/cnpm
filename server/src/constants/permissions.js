@@ -16,8 +16,7 @@ export const PERMISSIONS = [
   { resource: 'receipts', action: 'view', code: 'receipts:view' },
   { resource: 'reports', action: 'view', code: 'reports:view' },
   { resource: 'users', action: 'manage', code: 'users:manage' },
-  { resource: 'rbac', action: 'manage', code: 'rbac:manage' },
-  { resource: 'audit_logs', action: 'view', code: 'audit_logs:view' }
+  { resource: 'rbac', action: 'manage', code: 'rbac:manage' }
 ];
 
 export const ROLE_PERMISSIONS = {

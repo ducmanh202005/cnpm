@@ -34,7 +34,7 @@ const MODULES = [
   },
   {
     title: 'Quản trị hệ thống',
-    note: 'Tài khoản, RBAC và audit log toàn hệ thống.',
+    note: 'Tài khoản và phân quyền hệ thống.',
     roles: ['admin'],
     to: '/app/admin'
   }

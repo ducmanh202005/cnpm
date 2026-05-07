@@ -1,4 +1,3 @@
-import AuditLog from '../models/AuditLog.js';
 import User from '../models/User.js';
 import { createUserAccount, syncUserRoles } from '../services/accountService.js';
 import { recordAuditLog } from '../services/auditService.js';
@@ -157,40 +156,4 @@ export const updateUserRoles = asyncHandler(async (req, res) => {
   res.json({
     item: (await serializeUsers([user]))[0]
   });
-});
-
-export const listAuditLogs = asyncHandler(async (req, res) => {
-  const filter = {};
-
-  if (req.query.action) {
-    filter.action = { $regex: req.query.action, $options: 'i' };
-  }
-  if (req.query.result) {
-    filter.result = req.query.result;
-  }
-  if (req.query.q?.trim()) {
-    const keyword = req.query.q.trim();
-    const actors = await User.find({
-      $or: [
-        { username: { $regex: keyword, $options: 'i' } },
-        { displayName: { $regex: keyword, $options: 'i' } }
-      ]
-    }).select('_id');
-
-    filter.$or = [
-      { action: { $regex: keyword, $options: 'i' } },
-      { subjectType: { $regex: keyword, $options: 'i' } },
-      { subjectId: { $regex: keyword, $options: 'i' } },
-      { actor: { $in: actors.map((item) => item._id) } }
-    ];
-  }
-
-  const limit = Math.min(Number(req.query.limit) || 100, 300);
-
-  const items = await AuditLog.find(filter)
-    .populate('actor')
-    .sort({ createdAt: -1 })
-    .limit(limit);
-
-  res.json({ items });
 });

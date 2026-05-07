@@ -5,7 +5,10 @@ const { Schema } = mongoose;
 const staffSchema = new Schema(
   {
     staffCode: { type: String, required: true, unique: true, trim: true, uppercase: true },
-    person: { type: Schema.Types.ObjectId, ref: 'Person', required: true },
+    fullName: { type: String, trim: true },
+    email: { type: String, trim: true, lowercase: true },
+    phone: { type: String, trim: true },
+    address: { type: String, trim: true },
     title: { type: String, trim: true },
     division: { type: String, trim: true },
     staffUnit: { type: String, trim: true },

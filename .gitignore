@@ -7,3 +7,6 @@ coverage/
 !.env.example
 design.docx
 design_media/
+.tmp_erd_*/
+.tmp_erd_*.zip
+.tmp_erd_*.txt

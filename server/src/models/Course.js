@@ -15,6 +15,10 @@ const courseSchema = new Schema(
       enum: ['required', 'elective'],
       default: 'required'
     },
+    eligibleMajorCodes: {
+      type: [String],
+      default: []
+    },
     faculty: { type: String, required: true, trim: true },
     description: { type: String, trim: true },
     rules: {

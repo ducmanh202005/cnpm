@@ -1,5 +1,5 @@
 import User from '../models/User.js';
-import { resolveUserProfileId, syncStaffProfile } from './profileSyncService.js';
+import { syncStaffProfile } from './profileSyncService.js';
 import { syncUserRoles } from './rbacService.js';
 
 const cleanSeed = (value = '') =>
@@ -41,13 +41,11 @@ export const createUserAccount = async ({
     displayName,
     email,
     roles,
+    primaryRole: Array.isArray(roles) ? roles[0] : undefined,
     linkedModel,
     linkedId,
     staffUnit
   });
-
-  user.userProfile = await resolveUserProfileId({ linkedModel, linkedId });
-  await user.save({ validateBeforeSave: false });
 
   if (linkedModel === 'Staff') {
     await syncStaffProfile({

@@ -1,7 +1,6 @@
 import { Router } from 'express';
 import {
   createUser,
-  listAuditLogs,
   listUsers,
   resetPassword,
   toggleUserLock,
@@ -19,6 +18,5 @@ router.post('/users', createUser);
 router.patch('/users/:userId/toggle-lock', toggleUserLock);
 router.patch('/users/:userId/roles', updateUserRoles);
 router.post('/users/:userId/reset-password', resetPassword);
-router.get('/audit-logs', listAuditLogs);
 
 export default router;

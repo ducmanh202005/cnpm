@@ -1,10 +1,8 @@
 import PaymentTransaction from '../models/PaymentTransaction.js';
-import Receipt from '../models/Receipt.js';
 import Enrollment from '../models/Enrollment.js';
 import Semester from '../models/Semester.js';
 import Student from '../models/Student.js';
 import TuitionLiability from '../models/TuitionLiability.js';
-import TuitionRate from '../models/TuitionRate.js';
 import { createReference } from '../utils/reference.js';
 import { recordAuditLog } from './auditService.js';
 
@@ -23,6 +21,40 @@ const resolveLiabilityStatus = ({ amountDue, amountPaid, dueDate }) => {
 
   return 'unpaid';
 };
+
+const resolveTuitionRule = ({ semester, student }) => {
+  const rules = (semester?.tuitionRules || []).filter((item) => item.isActive !== false);
+  const applicableRules = rules.filter((item) => item.programType === (student.programType || 'standard'));
+  const pool = applicableRules.length > 0 ? applicableRules : rules;
+
+  return (
+    pool
+      .filter((item) => !item.effectiveFrom || new Date(item.effectiveFrom).getTime() <= Date.now())
+      .sort((a, b) => new Date(b.effectiveFrom || 0) - new Date(a.effectiveFrom || 0))[0] ||
+    pool.sort((a, b) => new Date(b.effectiveFrom || 0) - new Date(a.effectiveFrom || 0))[0] ||
+    null
+  );
+};
+
+const createReceiptFromPayment = (payment, liability) => {
+  if (!payment?.receiptNumber) {
+    return null;
+  }
+
+  return {
+    _id: payment._id,
+    receiptNumber: payment.receiptNumber,
+    issuedAt: payment.receiptIssuedAt,
+    student: payment.student,
+    semester: liability?.semester || payment.liability?.semester || null,
+    amount: payment.amount,
+    content: payment.receiptContent,
+    confirmedBy: payment.confirmedBy,
+    payment
+  };
+};
+
+export const buildReceiptFromPayment = createReceiptFromPayment;
 
 export const recalculateTuitionLiability = async ({ studentId, semesterId }) => {
   const [student, semester, existingLiability] = await Promise.all([
@@ -44,21 +76,9 @@ export const recalculateTuitionLiability = async ({ studentId, semesterId }) => 
     populate: { path: 'course' }
   });
 
-  const tuitionRate =
-    (await TuitionRate.findOne({
-      academicYear: semester.academicYear,
-      programType: student.programType,
-      isActive: true,
-      effectiveFrom: { $lte: new Date() },
-      $or: [{ semester: semesterId }, { semester: { $exists: false } }]
-    }).sort({ effectiveFrom: -1 })) ||
-    (await TuitionRate.findOne({
-      academicYear: semester.academicYear,
-      programType: student.programType,
-      isActive: true
-    }).sort({ effectiveFrom: -1 }));
+  const tuitionRule = resolveTuitionRule({ semester, student });
 
-  const unitPrice = tuitionRate?.pricePerCredit || 0;
+  const unitPrice = tuitionRule?.pricePerCredit || 0;
   const lines = enrollments.map((enrollment) => {
     const course = enrollment.section.course;
     const credits = course?.credits || 0;
@@ -89,7 +109,17 @@ export const recalculateTuitionLiability = async ({ studentId, semesterId }) => 
     {
       student: studentId,
       semester: semesterId,
-      rate: tuitionRate?._id || null,
+      rate: tuitionRule
+        ? {
+            rateCode: tuitionRule.rateCode,
+            name: tuitionRule.name,
+            academicYear: tuitionRule.academicYear,
+            programType: tuitionRule.programType,
+            pricePerCredit: tuitionRule.pricePerCredit,
+            effectiveFrom: tuitionRule.effectiveFrom,
+            notes: tuitionRule.notes
+          }
+        : null,
       totalCredits,
       subtotal,
       discountAmount,
@@ -150,10 +180,12 @@ export const registerPaymentForLiability = async ({
     status,
     referenceCode: createReference('PAY'),
     gatewayMessage,
-    createdBy: actorId
+    createdBy: actorId,
+    receiptNumber: status === 'success' ? createReference('RCPT') : undefined,
+    receiptIssuedAt: status === 'success' ? new Date() : undefined,
+    receiptContent: status === 'success' ? `Thu hoc phi hoc ky ${liability.semester.name}` : undefined,
+    confirmedBy: status === 'success' ? actorId : undefined
   });
-
-  let receipt = null;
 
   if (status === 'success') {
     liability.amountPaid += amount;
@@ -164,16 +196,6 @@ export const registerPaymentForLiability = async ({
       dueDate: liability.dueDate
     });
     await liability.save();
-
-    receipt = await Receipt.create({
-      receiptNumber: createReference('RCPT'),
-      payment: transaction._id,
-      student: studentId,
-      semester: liability.semester._id,
-      amount,
-      content: `Thu hoc phi hoc ky ${liability.semester.name}`,
-      confirmedBy: actorId
-    });
   }
 
   await recordAuditLog({
@@ -192,7 +214,7 @@ export const registerPaymentForLiability = async ({
 
   return {
     transaction,
-    receipt,
+    receipt: createReceiptFromPayment(transaction, liability),
     liability
   };
 };

@@ -7,6 +7,9 @@ import { recordAuditLog } from './auditService.js';
 import { syncCourseConditions } from './syncCatalogService.js';
 import { recalculateTuitionLiability } from './tuitionService.js';
 
+const EFFECTIVE_ENROLLMENT_STATUSES = ['approved'];
+const CANCELLABLE_ENROLLMENT_STATUSES = ['approved', 'pending'];
+
 const periodsOverlap = (aStart, aCount, bStart, bCount) => {
   const aEnd = aStart + aCount - 1;
   const bEnd = bStart + bCount - 1;
@@ -21,6 +24,18 @@ const schedulesConflict = (schedulesA = [], schedulesB = []) =>
         periodsOverlap(slotA.startPeriod, slotA.periodCount, slotB.startPeriod, slotB.periodCount)
     )
   );
+
+const resolveStudentMajorCodes = (student) => {
+  const studyMajors = Array.isArray(student?.studyMajors) ? student.studyMajors : [];
+  const studyMajorCodes = studyMajors.map((item) => item?.code).filter(Boolean);
+  const fallbackCodes = student?.majorCode ? [student.majorCode] : [];
+
+  return [
+    ...new Set(
+      [...studyMajorCodes, ...fallbackCodes].map((item) => String(item).trim().toUpperCase())
+    )
+  ];
+};
 
 const ACADEMIC_STATUS_LABELS = {
   active: 'đang hoạt động',
@@ -68,7 +83,8 @@ const createSectionSnapshot = (section) => ({
     ? {
         code: section.course.code,
         name: section.course.name,
-        credits: section.course.credits
+        credits: section.course.credits,
+        eligibleMajorCodes: section.course.eligibleMajorCodes || []
       }
     : null,
   lecturer: section.lecturer
@@ -139,13 +155,13 @@ const buildRegistrationValidationReport = async ({ student, section }) => {
   const existing = await Enrollment.findOne({
     student: student._id,
     section: section._id,
-    status: { $in: ['approved', 'pending'] }
+    status: { $in: CANCELLABLE_ENROLLMENT_STATUSES }
   });
 
   const activeEnrollments = await Enrollment.find({
     student: student._id,
     semester: section.semester._id,
-    status: 'approved'
+    status: { $in: EFFECTIVE_ENROLLMENT_STATUSES }
   }).populate({
     path: 'section',
     populate: { path: 'course semester' }
@@ -163,26 +179,19 @@ const buildRegistrationValidationReport = async ({ student, section }) => {
   const targetCredits = currentCredits + additionalCredits;
   const maxCredits = student.creditLimits?.maxCredits || 24;
 
-  const passedCodes = new Set(
-    (student.courseHistory || []).filter((item) => item.passed).map((item) => item.courseCode)
-  );
-  const attemptedCodes = new Set((student.courseHistory || []).map((item) => item.courseCode));
-  const enrolledCodes = new Set(
-    comparableEnrollments.map((item) => item.section?.course?.code).filter(Boolean)
-  );
-
-  const prerequisites = section.course?.rules?.prerequisites || [];
-  const previousCourses = section.course?.rules?.previousCourses || [];
-  const corequisites = section.course?.rules?.corequisites || [];
-
-  const missingPrerequisites = prerequisites.filter((code) => !passedCodes.has(code));
-  const missingPreviousCourses = previousCourses.filter((code) => !attemptedCodes.has(code));
-  const missingCorequisites = corequisites.filter(
-    (code) => !passedCodes.has(code) && !enrolledCodes.has(code)
-  );
+  const studentMajorCodes = resolveStudentMajorCodes(student);
+  const eligibleMajorCodes = (section.course?.eligibleMajorCodes || [])
+    .map((item) => String(item).trim().toUpperCase())
+    .filter(Boolean);
+  const majorEligible =
+    eligibleMajorCodes.length === 0 ||
+    studentMajorCodes.some((code) => eligibleMajorCodes.includes(code));
 
   const conflict = comparableEnrollments.find((enrollment) =>
     schedulesConflict(section.schedule, enrollment.section?.schedule || [])
+  );
+  const sameCourseEnrollment = comparableEnrollments.find(
+    (enrollment) => enrollment.section?.course?.code === section.course?.code
   );
 
   const registrationPeriodCheck = await resolveRegistrationPeriodCheck(
@@ -228,6 +237,22 @@ const buildRegistrationValidationReport = async ({ student, section }) => {
         : 'Bạn chưa đăng ký học phần này trong đợt hiện tại.'
     }),
     createCheck({
+      key: 'duplicate_course',
+      title: 'Không đăng ký trùng môn',
+      passed: !sameCourseEnrollment,
+      detail: sameCourseEnrollment
+        ? `Không được đăng ký hai lớp học phần khác nhau của cùng một môn học trong cùng học kỳ. Bạn đã đăng ký ${sameCourseEnrollment.section?.code} cho môn ${section.course?.code}.`
+        : 'Bạn chưa có lớp học phần nào khác của cùng môn học trong học kỳ này.'
+    }),
+    createCheck({
+      key: 'major_eligibility',
+      title: 'Phù hợp ngành học',
+      passed: majorEligible,
+      detail: majorEligible
+        ? 'Học phần phù hợp với ngành học hiện có của bạn.'
+        : 'Học phần này không thuộc ngành học hiện có của bạn.'
+    }),
+    createCheck({
       key: 'credit_limit',
       title: 'Giới hạn số tín chỉ',
       passed: targetCredits <= maxCredits,
@@ -235,39 +260,6 @@ const buildRegistrationValidationReport = async ({ student, section }) => {
         targetCredits <= maxCredits
           ? `Sau khi đăng ký, tổng số tín chỉ dự kiến là ${targetCredits}/${maxCredits}.`
           : `Nếu đăng ký học phần này, tổng số tín chỉ sẽ là ${targetCredits}/${maxCredits}, vượt giới hạn tối đa.`
-    }),
-    createCheck({
-      key: 'prerequisites',
-      title: 'Môn tiên quyết',
-      passed: missingPrerequisites.length === 0,
-      detail:
-        prerequisites.length === 0
-          ? 'Học phần này không yêu cầu môn tiên quyết.'
-          : missingPrerequisites.length === 0
-            ? `Đã đạt đầy đủ các môn tiên quyết: ${prerequisites.join(', ')}.`
-            : `Chưa đạt các môn tiên quyết bắt buộc: ${missingPrerequisites.join(', ')}.`
-    }),
-    createCheck({
-      key: 'previous_courses',
-      title: 'Môn học trước',
-      passed: missingPreviousCourses.length === 0,
-      detail:
-        previousCourses.length === 0
-          ? 'Học phần này không yêu cầu môn học trước.'
-          : missingPreviousCourses.length === 0
-            ? `Đã học các môn học trước cần thiết: ${previousCourses.join(', ')}.`
-            : `Bạn chưa học các môn học trước bắt buộc: ${missingPreviousCourses.join(', ')}.`
-    }),
-    createCheck({
-      key: 'corequisites',
-      title: 'Môn song hành',
-      passed: missingCorequisites.length === 0,
-      detail:
-        corequisites.length === 0
-          ? 'Học phần này không yêu cầu môn song hành.'
-          : missingCorequisites.length === 0
-            ? `Đã đáp ứng điều kiện môn song hành: ${corequisites.join(', ')}.`
-            : `Cần hoàn thành hoặc đăng ký cùng lúc các môn song hành: ${missingCorequisites.join(', ')}.`
     }),
     createCheck({
       key: 'schedule_conflict',
@@ -301,7 +293,9 @@ const buildRegistrationValidationReport = async ({ student, section }) => {
       id: String(student._id),
       studentCode: student.studentCode,
       fullName: student.fullName,
-      academicStatus: student.academicStatus
+      academicStatus: student.academicStatus,
+      majorCode: student.majorCode,
+      studyMajors: student.studyMajors || []
     },
     section: createSectionSnapshot(section)
   };
@@ -339,8 +333,6 @@ export const registerStudentToSection = async ({
   const report = await buildRegistrationValidationReport({ student, section });
   assertRegistrationAllowed(report);
 
-  // Reuse the existing registration record after a cancellation/rejection so we
-  // don't violate the unique student+section constraint on PhieuDangKyHocPhan.
   const reusableEnrollment = await Enrollment.findOne({
     student: student._id,
     section: section._id
@@ -404,7 +396,7 @@ export const cancelEnrollment = async ({ enrollmentId, actorId, ipAddress }) => 
     throw new Error('Không tìm thấy phiếu đăng ký học phần.');
   }
 
-  if (enrollment.status !== 'approved') {
+  if (!CANCELLABLE_ENROLLMENT_STATUSES.includes(enrollment.status)) {
     throw new Error('Chỉ có thể hủy phiếu đăng ký đang hiệu lực.');
   }
 
@@ -413,11 +405,12 @@ export const cancelEnrollment = async ({ enrollmentId, actorId, ipAddress }) => 
     enrollment.section.semester.registrationDeadline
   );
 
+  const wasApproved = enrollment.status === 'approved';
   enrollment.status = 'cancelled';
   await enrollment.save();
 
   const section = await Section.findById(enrollment.section._id);
-  if (section) {
+  if (section && wasApproved) {
     section.currentEnrollment = Math.max(0, section.currentEnrollment - 1);
     if (section.status === 'full') {
       section.status = 'open';

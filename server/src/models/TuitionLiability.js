@@ -25,7 +25,15 @@ const tuitionLiabilitySchema = new Schema(
     },
     student: { type: Schema.Types.ObjectId, ref: 'Student', required: true },
     semester: { type: Schema.Types.ObjectId, ref: 'Semester', required: true },
-    rate: { type: Schema.Types.ObjectId, ref: 'TuitionRate' },
+    rate: {
+      rateCode: { type: String, trim: true },
+      name: { type: String, trim: true },
+      academicYear: { type: String, trim: true },
+      programType: { type: String, trim: true },
+      pricePerCredit: { type: Number, default: 0 },
+      effectiveFrom: Date,
+      notes: { type: String, trim: true }
+    },
     totalCredits: { type: Number, default: 0 },
     subtotal: { type: Number, default: 0 },
     discountAmount: { type: Number, default: 0 },

@@ -26,6 +26,7 @@ const AcademicSections = lazy(() => import('./pages/academic/AcademicSections.js
 const AcademicStudents = lazy(() => import('./pages/academic/AcademicStudents.jsx'));
 const AcademicLecturers = lazy(() => import('./pages/academic/AcademicLecturers.jsx'));
 const AcademicSemesters = lazy(() => import('./pages/academic/AcademicSemesters.jsx'));
+const AcademicReports = lazy(() => import('./pages/academic/AcademicReports.jsx'));
 
 // Finance
 const FinanceLayout = lazy(() => import('./pages/finance/FinanceLayout.jsx'));
@@ -34,6 +35,7 @@ const FinanceRates = lazy(() => import('./pages/finance/FinanceRates.jsx'));
 const FinanceLiabilities = lazy(() => import('./pages/finance/FinanceLiabilities.jsx'));
 const FinancePayments = lazy(() => import('./pages/finance/FinancePayments.jsx'));
 const FinanceReceipts = lazy(() => import('./pages/finance/FinanceReceipts.jsx'));
+const FinanceReports = lazy(() => import('./pages/finance/FinanceReports.jsx'));
 
 // Lecturer
 const LecturerLayout = lazy(() => import('./pages/lecturer/LecturerLayout.jsx'));
@@ -47,7 +49,6 @@ const AdminLayout = lazy(() => import('./pages/admin/AdminLayout.jsx'));
 const AdminDashboard = lazy(() => import('./pages/admin/AdminDashboard.jsx'));
 const AdminUsers = lazy(() => import('./pages/admin/AdminUsers.jsx'));
 const AdminRoles = lazy(() => import('./pages/admin/AdminRoles.jsx'));
-const AdminAudit = lazy(() => import('./pages/admin/AdminAudit.jsx'));
 
 function RequireAuth({ roles, children }) {
   const { user, booting } = useAuth();
@@ -104,6 +105,7 @@ export default function App() {
             <Route path="students" element={<AcademicStudents />} />
             <Route path="lecturers" element={<AcademicLecturers />} />
             <Route path="semesters" element={<AcademicSemesters />} />
+            <Route path="reports" element={<AcademicReports />} />
           </Route>
 
           {/* Finance workspace */}
@@ -113,6 +115,7 @@ export default function App() {
             <Route path="liabilities" element={<FinanceLiabilities />} />
             <Route path="payments" element={<FinancePayments />} />
             <Route path="receipts" element={<FinanceReceipts />} />
+            <Route path="reports" element={<FinanceReports />} />
           </Route>
 
           {/* Lecturer workspace */}
@@ -128,7 +131,6 @@ export default function App() {
             <Route index element={<AdminDashboard />} />
             <Route path="users" element={<AdminUsers />} />
             <Route path="roles" element={<AdminRoles />} />
-            <Route path="audit" element={<AdminAudit />} />
           </Route>
         </Route>
 

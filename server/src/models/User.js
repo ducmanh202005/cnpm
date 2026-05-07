@@ -41,6 +41,10 @@ const userSchema = new Schema(
       enum: ALL_ROLES,
       default: []
     },
+    primaryRole: {
+      type: String,
+      enum: ALL_ROLES
+    },
     accountStatus: {
       type: String,
       enum: ['active', 'locked'],
@@ -49,14 +53,6 @@ const userSchema = new Schema(
     mustChangePassword: {
       type: Boolean,
       default: false
-    },
-    userProfile: {
-      type: Schema.Types.ObjectId,
-      ref: 'Person'
-    },
-    primaryRole: {
-      type: Schema.Types.ObjectId,
-      ref: 'Role'
     },
     linkedModel: {
       type: String,

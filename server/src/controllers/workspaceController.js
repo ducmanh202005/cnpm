@@ -1,22 +1,23 @@
-import AuditLog from '../models/AuditLog.js';
 import Course from '../models/Course.js';
 import Enrollment from '../models/Enrollment.js';
 import Lecturer from '../models/Lecturer.js';
 import PaymentTransaction from '../models/PaymentTransaction.js';
-import Receipt from '../models/Receipt.js';
 import RegistrationPeriod from '../models/RegistrationPeriod.js';
 import Section from '../models/Section.js';
 import Semester from '../models/Semester.js';
 import Student from '../models/Student.js';
 import TuitionLiability from '../models/TuitionLiability.js';
-import TuitionRate from '../models/TuitionRate.js';
 import User from '../models/User.js';
 import { permissionsCatalog } from '../constants/permissions.js';
 import { ROLE_LABELS } from '../constants/roles.js';
+import { buildReceiptFromPayment } from '../services/tuitionService.js';
 import { serializeUsers } from '../services/userService.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 
 const sumBy = (items, getValue) => items.reduce((sum, item) => sum + getValue(item), 0);
+const ACTIVE_ENROLLMENT_STATUSES = ['approved', 'pending'];
+const toSemesterLabel = (semester) =>
+  semester ? `${semester.name} ${semester.academicYear}` : 'Khac';
 
 const buildExamSchedule = (sections = []) =>
   sections
@@ -34,6 +35,29 @@ const buildExamSchedule = (sections = []) =>
     }))
     .sort((a, b) => new Date(a.examDate) - new Date(b.examDate));
 
+const flattenSemesterRates = (semesters = []) =>
+  semesters
+    .flatMap((semester) =>
+      (semester.tuitionRules || []).map((rule) => ({
+        id: `${semester._id}:${rule.rateCode}`,
+        rateCode: rule.rateCode,
+        name: rule.name,
+        academicYear: rule.academicYear,
+        programType: rule.programType,
+        pricePerCredit: rule.pricePerCredit,
+        effectiveFrom: rule.effectiveFrom,
+        notes: rule.notes,
+        isActive: rule.isActive !== false,
+        semester: {
+          _id: semester._id,
+          code: semester.code,
+          name: semester.name,
+          academicYear: semester.academicYear
+        }
+      }))
+    )
+    .sort((a, b) => new Date(b.effectiveFrom || 0) - new Date(a.effectiveFrom || 0));
+
 export const getStudentWorkspace = asyncHandler(async (req, res) => {
   const student = await Student.findById(req.user.linkedId);
   if (!student) {
@@ -46,7 +70,7 @@ export const getStudentWorkspace = asyncHandler(async (req, res) => {
       startDate: -1
     })) || (await Semester.findOne().sort({ startDate: -1 }));
 
-  const [registrationPeriods, availableSections, myEnrollments, tuitionHistory, payments, receipts] =
+  const [registrationPeriods, availableSections, myEnrollments, tuitionHistory, payments] =
     await Promise.all([
       RegistrationPeriod.find(activeSemester ? { semester: activeSemester._id } : {})
         .populate('semester')
@@ -70,11 +94,7 @@ export const getStudentWorkspace = asyncHandler(async (req, res) => {
           path: 'liability',
           populate: { path: 'semester' }
         })
-        .sort({ createdAt: -1 }),
-      Receipt.find({ student: student._id })
-        .populate('semester')
-        .populate('payment')
-        .sort({ issuedAt: -1 })
+        .sort({ createdAt: -1 })
     ]);
 
   const tuition =
@@ -91,6 +111,10 @@ export const getStudentWorkspace = asyncHandler(async (req, res) => {
       .map((item) => item.section)
       .filter(Boolean)
   );
+  const receipts = payments
+    .filter((item) => item.receiptNumber)
+    .map((item) => buildReceiptFromPayment(item, item.liability))
+    .filter(Boolean);
 
   res.json({
     profile: student,
@@ -107,18 +131,22 @@ export const getStudentWorkspace = asyncHandler(async (req, res) => {
 });
 
 export const getAcademicWorkspace = asyncHandler(async (req, res) => {
-  const [semesters, courses, sections, registrationPeriods, students, lecturers] = await Promise.all([
-    Semester.find().sort({ startDate: -1 }),
-    Course.find().sort({ code: 1 }),
-    Section.find()
-      .populate('course')
-      .populate('semester')
-      .populate('lecturer')
-      .sort({ createdAt: -1 }),
-    RegistrationPeriod.find().populate('semester').sort({ startAt: -1 }),
-    Student.find().sort({ studentCode: 1 }),
-    Lecturer.find().sort({ lecturerCode: 1 })
-  ]);
+  const [semesters, courses, sections, registrationPeriods, students, lecturers, enrollments] =
+    await Promise.all([
+      Semester.find().sort({ startDate: -1 }),
+      Course.find().sort({ code: 1 }),
+      Section.find()
+        .populate('course')
+        .populate('semester')
+        .populate('lecturer')
+        .sort({ createdAt: -1 }),
+      RegistrationPeriod.find().populate('semester').sort({ startAt: -1 }),
+      Student.find().sort({ studentCode: 1 }),
+      Lecturer.find().sort({ lecturerCode: 1 }),
+      Enrollment.find({ status: { $in: ACTIVE_ENROLLMENT_STATUSES } })
+        .select('student section semester status')
+        .sort({ createdAt: -1 })
+    ]);
 
   const studentStatusSummary = Object.entries(
     students.reduce((acc, item) => {
@@ -129,16 +157,86 @@ export const getAcademicWorkspace = asyncHandler(async (req, res) => {
 
   const registrationSummary = sections.map((item) => ({
     id: item._id,
+    semesterId: item.semester?._id || null,
+    semesterCode: item.semester?.code || '',
+    semesterName: toSemesterLabel(item.semester),
     sectionCode: item.code,
     courseCode: item.course?.code,
     courseName: item.course?.name,
     lecturerName: item.lecturer?.fullName || '--',
     status: item.status,
     currentEnrollment: item.currentEnrollment,
+    minCapacity: item.minCapacity,
     capacity: item.capacity,
     fillRate: item.capacity ? Math.round((item.currentEnrollment / item.capacity) * 100) : 0,
     examDate: item.exam?.examDate || null
   }));
+
+  const activeStudents = students.filter((item) => item.academicStatus === 'active');
+  const academicReportsBySemester = semesters.map((semester) => {
+    const semesterKey = String(semester._id);
+    const semesterSections = sections.filter(
+      (item) => String(item.semester?._id || item.semester) === semesterKey
+    );
+    const semesterEnrollments = enrollments.filter(
+      (item) => String(item.semester) === semesterKey
+    );
+    const registeredStudentIds = new Set(semesterEnrollments.map((item) => String(item.student)));
+
+    const studentsWithoutEnrollment = activeStudents
+      .filter((item) => !registeredStudentIds.has(String(item._id)))
+      .map((item) => ({
+        id: item._id,
+        studentCode: item.studentCode,
+        fullName: item.fullName,
+        major: item.major,
+        administrativeClass: item.administrativeClass || '--',
+        academicStatus: item.academicStatus
+      }));
+
+    const sectionUtilization = semesterSections
+      .map((item) => ({
+        id: item._id,
+        sectionCode: item.code,
+        courseCode: item.course?.code,
+        courseName: item.course?.name,
+        lecturerName: item.lecturer?.fullName || '--',
+        status: item.status,
+        currentEnrollment: item.currentEnrollment,
+        minCapacity: item.minCapacity,
+        capacity: item.capacity,
+        fillRate: item.capacity ? Math.round((item.currentEnrollment / item.capacity) * 100) : 0
+      }))
+      .sort((left, right) => right.fillRate - left.fillRate);
+
+    const riskySections = sectionUtilization.filter(
+      (item) => item.status === 'open' && item.currentEnrollment < item.minCapacity
+    );
+
+    return {
+      semester: {
+        _id: semester._id,
+        code: semester.code,
+        name: semester.name,
+        academicYear: semester.academicYear
+      },
+      summary: {
+        totalSections: semesterSections.length,
+        totalRegistrations: semesterEnrollments.length,
+        averageFillRate: sectionUtilization.length
+          ? Math.round(
+              sectionUtilization.reduce((sum, item) => sum + item.fillRate, 0) /
+                sectionUtilization.length
+            )
+          : 0,
+        riskySectionCount: riskySections.length,
+        studentsWithoutEnrollmentCount: studentsWithoutEnrollment.length
+      },
+      sectionUtilization,
+      riskySections,
+      studentsWithoutEnrollment
+    };
+  });
 
   res.json({
     semesters,
@@ -149,6 +247,7 @@ export const getAcademicWorkspace = asyncHandler(async (req, res) => {
     lecturers,
     studentStatusSummary,
     registrationSummary,
+    academicReportsBySemester,
     spotlight: {
       openSections: sections.filter((item) => item.status === 'open').length,
       fullSections: sections.filter((item) => item.status === 'full').length,
@@ -159,8 +258,8 @@ export const getAcademicWorkspace = asyncHandler(async (req, res) => {
 });
 
 export const getFinanceWorkspace = asyncHandler(async (req, res) => {
-  const [rates, liabilities, payments, receipts] = await Promise.all([
-    TuitionRate.find().populate('semester').sort({ createdAt: -1 }),
+  const [semesters, liabilities, payments] = await Promise.all([
+    Semester.find().sort({ startDate: -1 }),
     TuitionLiability.find().populate('student').populate('semester').sort({ updatedAt: -1 }),
     PaymentTransaction.find()
       .populate('student')
@@ -168,13 +267,13 @@ export const getFinanceWorkspace = asyncHandler(async (req, res) => {
         path: 'liability',
         populate: { path: 'semester' }
       })
-      .sort({ createdAt: -1 }),
-    Receipt.find()
-      .populate('student')
-      .populate('semester')
-      .populate('payment')
-      .sort({ issuedAt: -1 })
+      .sort({ createdAt: -1 })
   ]);
+  const rates = flattenSemesterRates(semesters);
+  const receipts = payments
+    .filter((item) => item.receiptNumber)
+    .map((item) => buildReceiptFromPayment(item, item.liability))
+    .filter(Boolean);
 
   const revenueBySemester = Object.values(
     receipts.reduce((acc, item) => {
@@ -182,7 +281,7 @@ export const getFinanceWorkspace = asyncHandler(async (req, res) => {
       if (!acc[key]) {
         acc[key] = {
           id: key,
-          semesterName: item.semester ? `${item.semester.name} ${item.semester.academicYear}` : 'Khac',
+          semesterName: toSemesterLabel(item.semester),
           amount: 0,
           receiptCount: 0
         };
@@ -199,16 +298,48 @@ export const getFinanceWorkspace = asyncHandler(async (req, res) => {
       if (!acc[key]) {
         acc[key] = {
           id: key,
-          semesterName: item.semester ? `${item.semester.name} ${item.semester.academicYear}` : 'Khac',
+          semesterName: toSemesterLabel(item.semester),
           outstandingAmount: 0,
-          amountDue: 0
+          amountDue: 0,
+          amountPaid: 0
         };
       }
       acc[key].outstandingAmount += item.outstandingAmount;
       acc[key].amountDue += item.amountDue;
+      acc[key].amountPaid += item.amountPaid;
       return acc;
     }, {})
   ).sort((a, b) => b.outstandingAmount - a.outstandingAmount);
+
+  const revenueByMonth = Object.values(
+    payments
+      .filter((item) => item.status === 'success')
+      .reduce((acc, item) => {
+        const semester = item.liability?.semester || null;
+        const paidAt = new Date(item.createdAt);
+        const monthKey = `${paidAt.getFullYear()}-${String(paidAt.getMonth() + 1).padStart(2, '0')}`;
+        const key = `${semester?._id ? String(semester._id) : 'unknown'}::${monthKey}`;
+
+        if (!acc[key]) {
+          acc[key] = {
+            id: key,
+            semesterId: semester?._id ? String(semester._id) : 'unknown',
+            semesterName: toSemesterLabel(semester),
+            monthKey,
+            monthLabel: new Intl.DateTimeFormat('vi-VN', {
+              month: 'long',
+              year: 'numeric'
+            }).format(paidAt),
+            amount: 0,
+            transactionCount: 0
+          };
+        }
+
+        acc[key].amount += item.amount;
+        acc[key].transactionCount += 1;
+        return acc;
+      }, {})
+  ).sort((left, right) => left.monthKey.localeCompare(right.monthKey));
 
   const paymentMethodBreakdown = Object.values(
     payments
@@ -236,6 +367,7 @@ export const getFinanceWorkspace = asyncHandler(async (req, res) => {
     reports: {
       revenueBySemester,
       outstandingBySemester,
+      revenueByMonth,
       paymentMethodBreakdown
     },
     spotlight: {
@@ -299,10 +431,7 @@ export const getLecturerWorkspace = asyncHandler(async (req, res) => {
 });
 
 export const getAdminWorkspace = asyncHandler(async (req, res) => {
-  const [users, auditLogs] = await Promise.all([
-    User.find().sort({ createdAt: -1 }),
-    AuditLog.find().populate('actor').sort({ createdAt: -1 }).limit(100)
-  ]);
+  const users = await User.find().sort({ createdAt: -1 });
 
   const roleDistribution = Object.entries(
     users.reduce((acc, user) => {
@@ -322,7 +451,6 @@ export const getAdminWorkspace = asyncHandler(async (req, res) => {
     users: await serializeUsers(users),
     rolesCatalog: Object.entries(ROLE_LABELS).map(([value, label]) => ({ value, label })),
     permissionsCatalog,
-    roleDistribution,
-    auditLogs
+    roleDistribution
   });
 });

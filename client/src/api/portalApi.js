@@ -308,9 +308,6 @@ export const adminApi = {
   listUsers(token, query) {
     return request('/admin/users', { token, query });
   },
-  listAuditLogs(token, query) {
-    return request('/admin/audit-logs', { token, query });
-  },
   createUser(token, payload) {
     return request('/admin/users', {
       method: 'POST',

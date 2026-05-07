@@ -1,32 +1,11 @@
-import AccountRole from '../models/AccountRole.js';
 import Lecturer from '../models/Lecturer.js';
-import Person from '../models/Person.js';
 import Section from '../models/Section.js';
-import Staff from '../models/Staff.js';
-import Student from '../models/Student.js';
 import User from '../models/User.js';
 import { createUserAccount, syncLinkedUserStatus } from '../services/accountService.js';
 import { recordAuditLog } from '../services/auditService.js';
 import { syncLecturerProfile } from '../services/profileSyncService.js';
 import { serializeUser } from '../services/userService.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
-
-const deletePersonIfOrphaned = async (personId) => {
-  if (!personId) {
-    return;
-  }
-
-  const [studentRef, lecturerRef, userRef, staffRef] = await Promise.all([
-    Student.exists({ userProfile: personId }),
-    Lecturer.exists({ userProfile: personId }),
-    User.exists({ userProfile: personId }),
-    Staff.exists({ person: personId })
-  ]);
-
-  if (!studentRef && !lecturerRef && !userRef && !staffRef) {
-    await Person.findByIdAndDelete(personId);
-  }
-};
 
 export const listLecturers = asyncHandler(async (req, res) => {
   const filter = {};
@@ -180,15 +159,12 @@ export const deleteLecturer = asyncHandler(async (req, res) => {
   }
 
   const linkedUser = await User.findOne({ linkedModel: 'Lecturer', linkedId: lecturer._id });
-  const personId = lecturer.userProfile;
 
   if (linkedUser) {
-    await AccountRole.deleteMany({ account: linkedUser._id });
     await User.findByIdAndDelete(linkedUser._id);
   }
 
   await Lecturer.findByIdAndDelete(lecturer._id);
-  await deletePersonIfOrphaned(personId);
 
   await recordAuditLog({
     actor: req.user._id,

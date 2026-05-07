@@ -1,34 +1,21 @@
 import mongoose from 'mongoose';
 import AdministrativeClass from '../models/AdministrativeClass.js';
-import AuditLog from '../models/AuditLog.js';
 import Cohort from '../models/Cohort.js';
 import Course from '../models/Course.js';
 import Department from '../models/Department.js';
 import Enrollment from '../models/Enrollment.js';
-import ExamSchedule from '../models/ExamSchedule.js';
 import Lecturer from '../models/Lecturer.js';
 import Major from '../models/Major.js';
 import PaymentTransaction from '../models/PaymentTransaction.js';
-import Permission from '../models/Permission.js';
-import Person from '../models/Person.js';
-import Policy from '../models/Policy.js';
-import Program from '../models/Program.js';
-import Receipt from '../models/Receipt.js';
 import RegistrationPeriod from '../models/RegistrationPeriod.js';
-import Role from '../models/Role.js';
-import RolePermission from '../models/RolePermission.js';
 import Room from '../models/Room.js';
 import Schedule from '../models/Schedule.js';
 import Section from '../models/Section.js';
 import Semester from '../models/Semester.js';
 import Staff from '../models/Staff.js';
 import Student from '../models/Student.js';
-import TimeSlot from '../models/TimeSlot.js';
 import TuitionLiability from '../models/TuitionLiability.js';
-import TuitionRate from '../models/TuitionRate.js';
 import User from '../models/User.js';
-import AccountRole from '../models/AccountRole.js';
-import CourseCondition from '../models/CourseCondition.js';
 import { connectDatabase } from '../config/db.js';
 import {
   seedAdministrativeClasses,
@@ -38,62 +25,57 @@ import {
   seedEnrollments,
   seedLecturers,
   seedMajors,
-  seedPolicies,
-  seedPrograms,
+  seedPayments,
   seedRegistrationPeriods,
   seedRooms,
   seedSections,
   seedSemesters,
   seedStudents,
-  seedTimeSlots,
   seedTuitionRates,
   seedUsers
 } from '../data/seedData.js';
-import { createUserAccount } from '../services/accountService.js';
-import { ensureRbacCatalog } from '../services/rbacService.js';
+import { createUserAccount, syncLinkedUserStatus } from '../services/accountService.js';
 import { syncLecturerProfile, syncStudentProfile } from '../services/profileSyncService.js';
 import { syncCourseConditions, syncSectionCalendars } from '../services/syncCatalogService.js';
 import { recalculateTuitionLiability, registerPaymentForLiability } from '../services/tuitionService.js';
 
 const clearDatabase = async () => {
   await Promise.all([
-    AuditLog.deleteMany({}),
-    Receipt.deleteMany({}),
     PaymentTransaction.deleteMany({}),
     TuitionLiability.deleteMany({}),
     Enrollment.deleteMany({}),
-    ExamSchedule.deleteMany({}),
     Schedule.deleteMany({}),
     Section.deleteMany({}),
     RegistrationPeriod.deleteMany({}),
-    TuitionRate.deleteMany({}),
-    CourseCondition.deleteMany({}),
     Course.deleteMany({}),
     Semester.deleteMany({}),
+    Student.deleteMany({}),
+    Lecturer.deleteMany({}),
+    Staff.deleteMany({}),
     AdministrativeClass.deleteMany({}),
-    Program.deleteMany({}),
     Cohort.deleteMany({}),
     Major.deleteMany({}),
     Department.deleteMany({}),
-    Policy.deleteMany({}),
-    Lecturer.deleteMany({}),
-    Student.deleteMany({}),
-    Staff.deleteMany({}),
-    Person.deleteMany({}),
-    AccountRole.deleteMany({}),
-    RolePermission.deleteMany({}),
-    Role.deleteMany({}),
-    Permission.deleteMany({}),
-    User.deleteMany({}),
     Room.deleteMany({}),
-    TimeSlot.deleteMany({})
+    User.deleteMany({})
   ]);
 
   await dropLegacyCollections();
 };
 
 const legacyCollections = [
-  'auditlogs',
+  'NguoiDung',
+  'VaiTro',
+  'QuyenHan',
+  'VaiTroQuyenHan',
+  'TaiKhoanVaiTro',
+  'DienChinhSach',
+  'ChuongTrinhDaoTao',
+  'DieuKienMonHoc',
+  'LichThi',
+  'Ca',
+  'BieuPhi',
+  'BienLaiDienTu',
   'courses',
   'enrollments',
   'lecturers',
@@ -108,6 +90,40 @@ const legacyCollections = [
   'users'
 ];
 
+const createMap = (items, key) => new Map(items.map((item) => [item[key], item]));
+
+const buildTuitionRulesForSemester = (semesterCode, academicYear) =>
+  seedTuitionRates
+    .filter((item) => item.semesterCode === semesterCode)
+    .map((item) => ({
+      rateCode: item.rateCode,
+      name: item.name,
+      academicYear: item.academicYear || academicYear,
+      programType: item.programType,
+      pricePerCredit: item.pricePerCredit,
+      effectiveFrom: item.effectiveFrom,
+      isActive: true,
+      notes: item.notes
+    }));
+
+const createPreferredPeriodMap = (items = []) => {
+  const map = new Map();
+
+  for (const item of items) {
+    const existing = map.get(item.semesterCode);
+    if (!existing) {
+      map.set(item.semesterCode, item);
+      continue;
+    }
+
+    if (existing.status !== 'active' && item.status === 'active') {
+      map.set(item.semesterCode, item);
+    }
+  }
+
+  return map;
+};
+
 const dropLegacyCollections = async () => {
   const existingCollections = await mongoose.connection.db.listCollections().toArray();
   for (const collectionName of legacyCollections) {
@@ -117,12 +133,139 @@ const dropLegacyCollections = async () => {
   }
 };
 
-const createMap = (items, key) => new Map(items.map((item) => [item[key], item]));
+const ensureLinkedId = (map, linkedCode, kind) => {
+  const linkedItem = map.get(linkedCode);
+  if (!linkedItem) {
+    throw new Error(`Khong tim thay ${kind} voi ma ${linkedCode}.`);
+  }
+
+  return linkedItem._id;
+};
+
+const createSeedAccounts = async ({ seedUserConfigs, lecturerMap, studentMap }) => {
+  const accountMap = new Map();
+
+  for (const config of seedUserConfigs.filter((item) => item.linkedModel === 'Staff')) {
+    const account = await createUserAccount({
+      ...config,
+      linkedModel: 'Staff'
+    });
+    accountMap.set(config.username.toLowerCase(), account);
+  }
+
+  for (const config of seedUserConfigs.filter((item) => item.linkedModel === 'Lecturer')) {
+    const linkedId = ensureLinkedId(lecturerMap, config.linkedCode, 'giang vien');
+    const account = await createUserAccount({
+      ...config,
+      linkedModel: 'Lecturer',
+      linkedId
+    });
+    accountMap.set(config.username.toLowerCase(), account);
+  }
+
+  for (const config of seedUserConfigs.filter((item) => item.linkedModel === 'Student')) {
+    const student = studentMap.get(config.linkedCode);
+    if (!student) {
+      throw new Error(`Khong tim thay sinh vien voi ma ${config.linkedCode}.`);
+    }
+
+    const account = await createUserAccount({
+      ...config,
+      linkedModel: 'Student',
+      linkedId: student._id
+    });
+    await syncLinkedUserStatus({
+      linkedModel: 'Student',
+      linkedId: student._id,
+      isActive: student.academicStatus === 'active'
+    });
+    accountMap.set(config.username.toLowerCase(), account);
+  }
+
+  return accountMap;
+};
+
+const syncSectionOccupancy = async ({ sections, seedSectionConfigMap }) => {
+  const occupancyRows = await Enrollment.aggregate([
+    { $match: { status: 'approved' } },
+    { $group: { _id: '$section', total: { $sum: 1 } } }
+  ]);
+
+  const occupancyMap = new Map(occupancyRows.map((item) => [String(item._id), item.total]));
+
+  for (const section of sections) {
+    const configuredStatus = seedSectionConfigMap.get(section.code)?.status || section.status;
+    const approvedCount = occupancyMap.get(String(section._id)) || 0;
+
+    section.currentEnrollment = approvedCount;
+    if (configuredStatus === 'open' || configuredStatus === 'full') {
+      section.status = approvedCount >= section.capacity ? 'full' : 'open';
+    } else {
+      section.status = configuredStatus;
+    }
+
+    await section.save();
+  }
+};
+
+const seedLiabilities = async ({ semesterMap, studentMap }) => {
+  const liabilityMap = new Map();
+  const pairKeys = [
+    ...new Set(
+      seedEnrollments
+        .filter((item) => item.status === 'approved')
+        .map((item) => `${item.studentCode}::${item.semesterCode}`)
+    )
+  ];
+
+  for (const pairKey of pairKeys) {
+    const [studentCode, semesterCode] = pairKey.split('::');
+    const liability = await recalculateTuitionLiability({
+      studentId: studentMap.get(studentCode)._id,
+      semesterId: semesterMap.get(semesterCode)._id
+    });
+    liabilityMap.set(pairKey, liability);
+  }
+
+  return liabilityMap;
+};
+
+const seedPaymentTransactions = async ({ liabilityMap, semesterMap, studentMap, userAccountMap }) => {
+  const financeAccount = userAccountMap.get('finance1');
+  if (!financeAccount) {
+    throw new Error('Khong tim thay tai khoan finance1 de ghi nhan thanh toan seed.');
+  }
+
+  for (const item of seedPayments) {
+    const key = `${item.studentCode}::${item.semesterCode}`;
+    let liability = liabilityMap.get(key);
+
+    if (!liability) {
+      liability = await recalculateTuitionLiability({
+        studentId: studentMap.get(item.studentCode)._id,
+        semesterId: semesterMap.get(item.semesterCode)._id
+      });
+      liabilityMap.set(key, liability);
+    }
+
+    const result = await registerPaymentForLiability({
+      liabilityId: liability._id,
+      studentId: studentMap.get(item.studentCode)._id,
+      amount: item.amount,
+      method: item.method,
+      actorId: financeAccount.user._id,
+      ipAddress: '127.0.0.1',
+      status: item.status,
+      gatewayMessage: item.gatewayMessage
+    });
+
+    liabilityMap.set(key, result.liability);
+  }
+};
 
 const runSeed = async () => {
   await connectDatabase();
   await clearDatabase();
-  await ensureRbacCatalog();
 
   const departments = await Department.insertMany(seedDepartments);
   const departmentMap = createMap(departments, 'code');
@@ -146,19 +289,6 @@ const runSeed = async () => {
   );
   const cohortMap = createMap(cohorts, 'code');
 
-  const programs = await Program.insertMany(
-    seedPrograms.map((item) => ({
-      code: item.code,
-      major: majorMap.get(item.majorCode)._id,
-      cohort: cohortMap.get(item.cohortCode)._id,
-      name: item.name,
-      totalCredits: item.totalCredits,
-      programType: item.programType,
-      description: item.description
-    }))
-  );
-  const programMap = createMap(programs, 'code');
-
   const classes = await AdministrativeClass.insertMany(
     seedAdministrativeClasses.map((item) => ({
       code: item.code,
@@ -170,20 +300,14 @@ const runSeed = async () => {
   );
   const classMap = createMap(classes, 'code');
 
-  const policies = await Policy.insertMany(
-    seedPolicies.map((item) => ({
-      code: item.code,
-      name: item.name,
-      discountRate: item.discountRate,
-      description: item.description
+  await Room.insertMany(seedRooms);
+
+  const semesters = await Semester.insertMany(
+    seedSemesters.map((item) => ({
+      ...item,
+      tuitionRules: buildTuitionRulesForSemester(item.code, item.academicYear)
     }))
   );
-  const policyMap = createMap(policies, 'code');
-
-  await Room.insertMany(seedRooms);
-  await TimeSlot.insertMany(seedTimeSlots);
-
-  const semesters = await Semester.insertMany(seedSemesters);
   const semesterMap = createMap(semesters, 'code');
 
   const lecturers = [];
@@ -204,9 +328,7 @@ const runSeed = async () => {
       departmentId: departmentMap.get(item.departmentCode)?._id || null,
       majorId: majorMap.get(item.majorCode)?._id || null,
       cohortId: cohortMap.get(item.cohortCode)?._id || null,
-      administrativeClassId: classMap.get(item.classCode)?._id || null,
-      programId: programMap.get(item.programCode)?._id || null,
-      policyId: policyMap.get(item.policy.code)?._id || null
+      administrativeClassId: classMap.get(item.classCode)?._id || null
     });
     await syncStudentProfile(student);
     students.push(student);
@@ -219,10 +341,8 @@ const runSeed = async () => {
       ...item,
       departmentId: departmentMap.get(item.departmentCode)?._id || null
     });
-    courses.push(course);
-  }
-  for (const course of courses) {
     await syncCourseConditions(course);
+    courses.push(course);
   }
   const courseMap = createMap(courses, 'code');
 
@@ -237,7 +357,7 @@ const runSeed = async () => {
       status: item.status
     }))
   );
-  const periodMap = createMap(periods, 'periodCode');
+  createMap(periods, 'periodCode');
 
   const sections = [];
   for (const item of seedSections) {
@@ -248,7 +368,7 @@ const runSeed = async () => {
       lecturer: lecturerMap.get(item.lecturerCode)._id,
       capacity: item.capacity,
       minCapacity: item.minCapacity,
-      currentEnrollment: item.currentEnrollment,
+      currentEnrollment: item.currentEnrollment || 0,
       status: item.status,
       room: item.room,
       schedule: item.schedule,
@@ -258,47 +378,20 @@ const runSeed = async () => {
     sections.push(section);
   }
   const sectionMap = createMap(sections, 'code');
+  const seedSectionConfigMap = createMap(seedSections, 'code');
 
-  const rates = await TuitionRate.insertMany(
-    seedTuitionRates.map((item) => ({
-      rateCode: item.rateCode,
-      name: item.name,
-      academicYear: item.academicYear,
-      semester: semesterMap.get(item.semesterCode)._id,
-      programType: item.programType,
-      pricePerCredit: item.pricePerCredit,
-      effectiveFrom: item.effectiveFrom,
-      notes: item.notes
-    }))
-  );
-  const rateMap = createMap(rates, 'rateCode');
-
-  const adminAccount = await createUserAccount({
-    ...seedUsers.find((item) => item.username === 'admin1'),
-    linkedModel: 'Staff'
+  const userAccountMap = await createSeedAccounts({
+    seedUserConfigs: seedUsers,
+    lecturerMap,
+    studentMap
   });
 
-  const academicAccount = await createUserAccount({
-    ...seedUsers.find((item) => item.username === 'daotao1'),
-    linkedModel: 'Staff'
-  });
+  const academicAccount = userAccountMap.get('daotao1');
+  if (!academicAccount) {
+    throw new Error('Khong tim thay tai khoan daotao1 de duyet seed dang ky.');
+  }
 
-  const financeAccount = await createUserAccount({
-    ...seedUsers.find((item) => item.username === 'finance1'),
-    linkedModel: 'Staff'
-  });
-
-  await createUserAccount({
-    ...seedUsers.find((item) => item.username === 'gv001'),
-    linkedModel: 'Lecturer',
-    linkedId: lecturerMap.get('GV001')._id
-  });
-
-  await createUserAccount({
-    ...seedUsers.find((item) => item.username === 'sv001'),
-    linkedModel: 'Student',
-    linkedId: studentMap.get('B23DCKH080')._id
-  });
+  const preferredPeriodMap = createPreferredPeriodMap(seedRegistrationPeriods);
 
   await Enrollment.insertMany(
     seedEnrollments.map((item) => ({
@@ -306,68 +399,54 @@ const runSeed = async () => {
       section: sectionMap.get(item.sectionCode)._id,
       semester: semesterMap.get(item.semesterCode)._id,
       status: item.status,
-      approvedBy: academicAccount.user._id
+      approvedBy: academicAccount.user._id,
+      note: `Dang ky trong ${preferredPeriodMap.get(item.semesterCode)?.name || 'dot dang ky'}`
     }))
   );
 
-  const liability = await recalculateTuitionLiability({
-    studentId: studentMap.get('B23DCKH080')._id,
-    semesterId: semesterMap.get('2025-2026-HK2')._id
+  await syncSectionOccupancy({
+    sections,
+    seedSectionConfigMap
   });
 
-  liability.rate = rateMap.get('BP-2025-HK2')._id;
-  await liability.save();
-
-  await registerPaymentForLiability({
-    liabilityId: liability._id,
-    studentId: studentMap.get('B23DCKH080')._id,
-    amount: 1000000,
-    method: 'bank_transfer',
-    actorId: financeAccount.user._id,
-    ipAddress: '127.0.0.1',
-    status: 'success',
-    gatewayMessage: 'Seed payment'
+  const liabilityMap = await seedLiabilities({
+    semesterMap,
+    studentMap
   });
 
-  await AuditLog.insertMany([
-    {
-      actor: adminAccount.user._id,
-      action: 'seed.bootstrap',
-      subjectType: 'System',
-      subjectId: 'bootstrap',
-      ipAddress: '127.0.0.1',
-      result: 'success',
-      details: {
-        note: 'Khoi tao bo du lieu ERD'
-      }
-    },
-    {
-      actor: academicAccount.user._id,
-      action: 'section.review',
-      subjectType: 'Section',
-      subjectId: String(sectionMap.get('DB202-01')._id),
-      ipAddress: '127.0.0.1',
-      result: 'success',
-      details: {
-        note: 'Kiem tra hoc phan cho dot dang ky'
-      }
-    },
-    {
-      actor: financeAccount.user._id,
-      action: 'finance.reconcile',
-      subjectType: 'TuitionLiability',
-      subjectId: String(liability._id),
-      ipAddress: '127.0.0.1',
-      result: 'success',
-      details: {
-        note: 'Doi soat cong no va giao dich mau'
-      }
-    }
-  ]);
+  await seedPaymentTransactions({
+    liabilityMap,
+    semesterMap,
+    studentMap,
+    userAccountMap
+  });
 
   await dropLegacyCollections();
 
-  console.log('Seed completed successfully with ERD-aligned collections.');
+  console.log('Seed completed successfully with 17 target collections.');
+  console.log(
+    JSON.stringify(
+      {
+        departments: departments.length,
+        majors: majors.length,
+        cohorts: cohorts.length,
+        classes: classes.length,
+        rooms: seedRooms.length,
+        semesters: semesters.length,
+        registrationPeriods: periods.length,
+        lecturers: lecturers.length,
+        students: students.length,
+        courses: courses.length,
+        sections: sections.length,
+        enrollments: seedEnrollments.length,
+        users: seedUsers.length,
+        liabilities: liabilityMap.size,
+        payments: seedPayments.length
+      },
+      null,
+      2
+    )
+  );
   process.exit(0);
 };
 
