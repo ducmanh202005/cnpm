@@ -52,7 +52,7 @@ Ung dung MERN cho de tai "He thong quan ly dang ky tin chi va thu hoc phi".
 - Tu dong tinh nghia vu hoc phi theo tin chi, bieu phi hoc ky va mien giam.
 - Ghi nhan thanh toan, sinh bien lai dien tu, theo doi cong no.
 - Bao cao dao tao va bao cao doanh thu theo hoc ky.
-- Quan ly tai khoan va phan quyen he thong.
+- Quan ly tai khoan he thong.
 
 ## Cau hinh nhanh
 
