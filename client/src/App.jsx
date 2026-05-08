@@ -8,6 +8,7 @@ import { getPrimaryHome, hasAnyRole } from './utils/appConfig.js';
 /* ── Lazy-loaded pages ── */
 const LoginPage = lazy(() => import('./pages/LoginPage.jsx'));
 const OverviewPage = lazy(() => import('./pages/OverviewPage.jsx'));
+const AccountSettingsPage = lazy(() => import('./pages/AccountSettingsPage.jsx'));
 
 // Student
 const StudentLayout = lazy(() => import('./pages/student/StudentLayout.jsx'));
@@ -26,6 +27,7 @@ const AcademicSections = lazy(() => import('./pages/academic/AcademicSections.js
 const AcademicStudents = lazy(() => import('./pages/academic/AcademicStudents.jsx'));
 const AcademicLecturers = lazy(() => import('./pages/academic/AcademicLecturers.jsx'));
 const AcademicSemesters = lazy(() => import('./pages/academic/AcademicSemesters.jsx'));
+const AcademicSchedule = lazy(() => import('./pages/academic/AcademicSchedule.jsx'));
 const AcademicReports = lazy(() => import('./pages/academic/AcademicReports.jsx'));
 
 // Finance
@@ -86,6 +88,7 @@ export default function App() {
 
         <Route path="/app" element={<RequireAuth><AppShell /></RequireAuth>}>
           <Route path="overview" element={<OverviewPage />} />
+          <Route path="account" element={<AccountSettingsPage />} />
 
           {/* Student workspace */}
           <Route path="student" element={<RequireAuth roles={['student']}><StudentLayout /></RequireAuth>}>
@@ -105,6 +108,7 @@ export default function App() {
             <Route path="students" element={<AcademicStudents />} />
             <Route path="lecturers" element={<AcademicLecturers />} />
             <Route path="semesters" element={<AcademicSemesters />} />
+            <Route path="schedule" element={<AcademicSchedule />} />
             <Route path="reports" element={<AcademicReports />} />
           </Route>
 

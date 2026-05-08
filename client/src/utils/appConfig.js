@@ -30,6 +30,7 @@ export const WORKSPACE_NAV = {
     { id: 'ac-students', label: 'Quản lý sinh viên', icon: '🎓', to: '/app/academic/students' },
     { id: 'ac-lecturers', label: 'Quản lý giảng viên', icon: '👨‍🏫', to: '/app/academic/lecturers' },
     { id: 'ac-semesters', label: 'Học kỳ & Đợt ĐK', icon: '🗓️', to: '/app/academic/semesters' },
+    { id: 'ac-schedule', label: 'Quản lý lịch học', icon: '📆', to: '/app/academic/schedule' },
     { id: 'ac-reports', label: 'Báo cáo', icon: '📊', to: '/app/academic/reports' }
   ],
   finance: [

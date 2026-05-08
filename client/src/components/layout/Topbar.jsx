@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom';
 import { formatRoles } from '../../utils/formatters.js';
 
 const getInitials = (value = '') =>
@@ -32,6 +33,9 @@ export default function Topbar({ user, onLogout }) {
           <button className="topbar__notification" type="button" title="Thông báo">
             🔔
           </button>
+          <Link className="ghost-button" to="/app/account">
+            Tài khoản
+          </Link>
           <button className="ghost-button" onClick={onLogout} type="button">
             Đăng xuất
           </button>
